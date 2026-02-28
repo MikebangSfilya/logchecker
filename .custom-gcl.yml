@@ -3,3 +3,4 @@ plugins:
   - module: github.com/MikebangSfilya/logchecker
     import: github.com/MikebangSfilya/logchecker
     name: logchecker
+    version: latest  
