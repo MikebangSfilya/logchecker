@@ -1,0 +1,10 @@
+linters-settings:
+  custom:
+    logchecker:
+      type: module
+      description: check the logs
+      original-url: github.com/MikebangSfilya/logchecker
+
+linters:
+  enable:
+    - logchecker

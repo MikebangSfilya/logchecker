@@ -1,0 +1,5 @@
+version: v1.64.8
+plugins:
+  - module: github.com/MikebangSfilya/logchecker
+    import: github.com/MikebangSfilya/logchecker
+    name: logchecker
