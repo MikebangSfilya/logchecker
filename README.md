@@ -58,10 +58,10 @@ go build -buildmode=plugin -o logchecker.so ./plugin/plugin.go
         - logchecker
 
 ```
+
 Запуск:
 
-```
-
+```bash
 golangci-lint run
 ```
 
@@ -69,6 +69,8 @@ golangci-lint run
 
 Проект включает в себя unit-тесты логики и интеграционные тесты на базе testdata.
 Запуск всех тестов:
-Bash
 
+
+```bash
 go test ./...
+```
