@@ -3,6 +3,7 @@ package analyzer
 import (
 	"go/ast"
 	"go/token"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
@@ -11,6 +12,8 @@ import (
 	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/ast/inspector"
 )
+
+var sensitiveRegex = regexp.MustCompile(`(?i)(password|token|api_key|secret)`)
 
 var Analyzer = &analysis.Analyzer{
 	Name:     "logchecker",
@@ -29,25 +32,32 @@ func run(pass *analysis.Pass) (any, error) {
 		if !ok {
 			return
 		}
-		ident, ok := sel.X.(*ast.Ident)
-		if !ok {
+		obj := pass.TypesInfo.ObjectOf(sel.Sel)
+		if obj == nil || obj.Pkg() == nil {
 			return
 		}
-		pkgName := ident.Name
-		methodName := sel.Sel.Name
-		isSlog := pkgName == "slog" || pkgName == "log"
-		isZap := pkgName == "zap" || pkgName == "logger"
+		pkgPath := obj.Pkg().Path()
+		isSlog := pkgPath == "log/slog" || pkgPath == "log"
+		isZap := pkgPath == "go.uber.org/zap"
 		if !isSlog && !isZap {
 			return
 		}
-		if methodName != "Info" && methodName != "Error" && methodName != "Debug" && methodName != "Warn" {
+		var msgIndex int
+		switch sel.Sel.Name {
+		case "Info", "Error", "Debug", "Warn", "Fatal":
+			msgIndex = 0
+		case "InfoContext", "ErrorContext", "DebugContext", "WarnContext":
+			msgIndex = 1
+		default:
 			return
 		}
-		if len(call.Args) == 0 {
+
+		if len(call.Args) <= msgIndex {
 			return
 		}
-		msgArg := call.Args[0]
-		checkRules(pass, msgArg)
+
+		checkRules(pass, call.Args[msgIndex])
+		checkSensitiveDataArgs(pass, call.Args)
 	})
 
 	return nil, nil
@@ -62,66 +72,86 @@ func checkRules(pass *analysis.Pass, expr ast.Expr) {
 			checkIsEmoji(pass, lit, strVal)
 		}
 	}
-	checkSensitiveData(pass, expr)
 
 }
 
 func checkIsLowerCase(pass *analysis.Pass, lit *ast.BasicLit, msg string) {
-	firstRune := []rune(msg)[0]
-	if unicode.IsUpper(firstRune) {
+	if !isLowerCase(msg) {
 		pass.Reportf(lit.Pos(), "the log message must begin with a lowercase letter")
 	}
 }
 
 func checkIsEnglish(pass *analysis.Pass, lit *ast.BasicLit, msg string) {
-	for _, r := range msg {
-		if r > unicode.MaxASCII && unicode.IsLetter(r) {
-			pass.Reportf(lit.Pos(), "the log message must be in English only")
-			return
-		}
+	if !isEnglish(msg) {
+		pass.Reportf(lit.Pos(), "the log message must be in English only")
 	}
-
 }
 
 func checkIsEmoji(pass *analysis.Pass, lit *ast.BasicLit, msg string) {
-	for _, r := range msg {
-		if unicode.IsSymbol(r) || r == '!' || r == '?' || r == '.' {
-			pass.Reportf(lit.Pos(), "the log message must not contain special characters or emojis")
-			return
-		}
+	if hasSpecialCharsOrEmoji(msg) {
+		pass.Reportf(lit.Pos(), "the log message must not contain special characters or emojis")
 	}
 }
 
-func checkSensitiveData(pass *analysis.Pass, expr ast.Expr) {
-	// Список триггеров
-	keywords := []string{"password", "token", "api_key", "secret"}
-
-	var inspect func(e ast.Expr)
-	inspect = func(e ast.Expr) {
-		switch v := e.(type) {
-		case *ast.BasicLit:
-			if v.Kind == token.STRING {
-				val, _ := strconv.Unquote(v.Value)
-				s := strings.ToLower(val)
-				for _, kw := range keywords {
-					if strings.Contains(s, kw) {
-						pass.Reportf(v.Pos(), "log message contains sensitive data: %s", kw)
+func checkSensitiveDataArgs(pass *analysis.Pass, args []ast.Expr) {
+	for _, arg := range args {
+		ast.Inspect(arg, func(n ast.Node) bool {
+			switch v := n.(type) {
+			case *ast.BasicLit:
+				if v.Kind == token.STRING {
+					val, err := strconv.Unquote(v.Value)
+					if err == nil {
+						if match := sensitiveRegex.FindString(val); match != "" {
+							pass.Reportf(v.Pos(), "log message contains sensitive data: %s", strings.ToLower(match))
+						}
 					}
 				}
-			}
-		case *ast.Ident:
-			name := strings.ToLower(v.Name)
-			for _, kw := range keywords {
-				if strings.Contains(name, kw) {
-					pass.Reportf(v.Pos(), "attempt to log sensitive variable: %s", kw)
+			case *ast.Ident:
+				if match := sensitiveRegex.FindString(v.Name); match != "" {
+					pass.Reportf(v.Pos(), "attempt to log sensitive variable: %s", strings.ToLower(match))
 				}
 			}
-		case *ast.BinaryExpr:
-			if v.Op == token.ADD {
-				inspect(v.X)
-				inspect(v.Y)
+			return true
+		})
+	}
+}
+
+func isLowerCase(msg string) bool {
+	for _, r := range msg {
+		if unicode.IsLetter(r) {
+			return !unicode.IsUpper(r)
+		}
+	}
+	return true
+}
+
+func isEnglish(msg string) bool {
+	for _, r := range msg {
+		if r > unicode.MaxASCII && unicode.IsLetter(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasSpecialCharsOrEmoji(msg string) bool {
+	if msg == "" {
+		return false
+	}
+
+	runes := []rune(msg)
+	for i, r := range runes {
+		if unicode.IsSymbol(r) || r == '!' || r == '?' {
+			return true
+		}
+		if r == '.' {
+			if i == len(runes)-1 {
+				return true
+			}
+			if i+1 < len(runes) && runes[i+1] == '.' {
+				return true
 			}
 		}
 	}
-	inspect(expr)
+	return false
 }
