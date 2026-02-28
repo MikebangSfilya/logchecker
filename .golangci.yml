@@ -2,6 +2,7 @@ linters-settings:
   custom:
     logchecker:
       type: module
+      module: github.com/MikebangSfilya/logchecker
       description: check the logs
       original-url: github.com/MikebangSfilya/logchecker
 
